@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         TamilGun - Style Netflix (grille + fiche film)
 // @namespace    local.netflix.style
-// @version      4.0
-// @description  Grille d'affiches avec recherche, favoris et pagination, puis fiche film épurée avec affiche, note et résumé
+// @version      4.1
+// @description  Grille + fiche film; Lecture ouvre le lecteur en plein écran
 // @match        https://tamilgun.now/*
 // @run-at       document-idle
 // @grant        GM.xmlHttpRequest
@@ -363,6 +363,7 @@
       font-family:-apple-system,Helvetica,Arial,sans-serif;position:sticky;top:0;z-index:2147483000}
     #tgp-bar b{flex:1;color:#e50914;font-size:16px;letter-spacing:1px}
     #tgp-bar button{padding:7px 12px;border-radius:6px;border:1px solid #555;background:#222;color:#fff;font-size:14px}
+    #tgp-bar .tgp-fs-close{display:none}
 
     #tgp-hero{position:relative;display:flex;gap:14px;padding:18px 12px 22px;color:#fff;
       font-family:-apple-system,Helvetica,Arial,sans-serif;background-color:#111;
@@ -381,6 +382,25 @@
     #tgp-hero .tgp-go{padding:10px 22px;border-radius:6px;border:none;background:#fff;color:#000;
       font-size:16px;font-weight:700}
     #tgp-hero a.tgp-more{color:#ddd;font-size:13px}
+
+    /* Plein écran au clic Lecture — sans changer le DOM du player */
+    body.tgp-watching{overflow:hidden!important}
+    body.tgp-watching #tgp-hero{display:none!important}
+    body.tgp-watching #tgp-toggle{display:none!important}
+    body.tgp-watching #tgp-bar{position:fixed!important;top:0;left:0;right:0;z-index:2147483010!important}
+    body.tgp-watching #tgp-bar .tgp-fs-close{display:inline-block!important}
+    body.tgp-watching .tgp-theater,
+    body.tgp-watching .tgp-path.tgp-theater{
+      position:fixed!important;top:52px!important;top:calc(48px + env(safe-area-inset-top))!important;
+      left:0!important;right:0!important;bottom:0!important;z-index:2147483005!important;
+      width:100%!important;max-width:none!important;height:auto!important;margin:0!important;padding:0!important;
+      background:#000!important;overflow:auto!important;float:none!important;display:block!important}
+    body.tgp-watching .tgp-theater iframe.tgp-player,
+    body.tgp-watching .tgp-theater video.tgp-player,
+    body.tgp-watching iframe.tgp-player,
+    body.tgp-watching video.tgp-player{
+      width:100%!important;height:calc(100dvh - 52px)!important;height:calc(100dvh - 48px - env(safe-area-inset-top))!important;
+      max-height:none!important;min-height:60vh!important;background:#000!important;border:0!important}
 
     #tgp-toggle{position:fixed;left:14px;bottom:calc(14px + env(safe-area-inset-bottom));z-index:2147483001;
       width:48px;height:48px;border-radius:50%;border:none;background:#e50914;color:#fff;font-size:20px;
@@ -563,6 +583,22 @@
     }
   }
 
+  function setFullscreen(on) {
+    opened = !!on;
+    document.body.classList.toggle('tgp-watching', opened);
+    if (closedEl) {
+      closedEl.classList.toggle('tgp-closed', !opened);
+      closedEl.classList.toggle('tgp-theater', opened);
+    }
+    if (opened) {
+      const h = (bar && bar.offsetHeight) || 52;
+      if (closedEl) closedEl.style.top = h + 'px';
+      window.scrollTo(0, 0);
+    } else if (closedEl) {
+      closedEl.style.top = '';
+    }
+  }
+
   // ---------- Barre + fiche film ----------
   function buildTop() {
     bar = document.createElement('div');
@@ -572,10 +608,14 @@
     back.onclick = () => history.back();
     const logo = document.createElement('b');
     logo.textContent = 'FILMS';
+    const fsClose = document.createElement('button');
+    fsClose.className = 'tgp-fs-close';
+    fsClose.textContent = '✕ Fermer';
+    fsClose.onclick = () => setFullscreen(false);
     const exit = document.createElement('button');
     exit.textContent = 'Page complète';
     exit.onclick = () => setEnabled(false);
-    bar.append(back, logo, exit);
+    bar.append(back, logo, fsClose, exit);
 
     const info = getInfo();
     hero = document.createElement('div');
@@ -610,11 +650,7 @@
       const go = document.createElement('button');
       go.className = 'tgp-go';
       go.textContent = '▶ Lecture';
-      go.onclick = () => {
-        opened = true;
-        closedEl.classList.remove('tgp-closed');
-        closedEl.scrollIntoView({ behavior: 'smooth', block: 'start' });
-      };
+      go.onclick = () => setFullscreen(true);
       actions.appendChild(go);
     }
     box.appendChild(actions);
@@ -625,13 +661,18 @@
 
     applyToi();
     requestToi(info.title);
+    if (opened) setFullscreen(true);
   }
 
   // ---------- Isoler / restaurer ----------
   function clear() {
+    opened = false;
+    document.body.classList.remove('tgp-watching');
     document.querySelectorAll('[data-tgp-hide]').forEach(e => e.removeAttribute('data-tgp-hide'));
-    document.querySelectorAll('.tgp-path,.tgp-player,.tgp-keeper,.tgp-closed').forEach(e =>
-      e.classList.remove('tgp-path', 'tgp-player', 'tgp-keeper', 'tgp-closed'));
+    document.querySelectorAll('.tgp-path,.tgp-player,.tgp-keeper,.tgp-closed,.tgp-theater').forEach(e => {
+      e.classList.remove('tgp-path', 'tgp-player', 'tgp-keeper', 'tgp-closed', 'tgp-theater');
+      if (e.style) e.style.top = '';
+    });
     document.body.classList.remove('tgp-on');
     if (bar) { bar.remove(); bar = null; }
     if (hero) { hero.remove(); hero = null; }
