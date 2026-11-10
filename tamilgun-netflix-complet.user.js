@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         TamilGun - Style Netflix (grille + fiche film)
 // @namespace    local.netflix.style
-// @version      5.2
-// @description  Grille Netflix + fiche film: lecteur plein écran, anti-pubs superposées, scroll OK
+// @version      5.3
+// @description  Grille Netflix + Lecture en théâtre plein écran avec gros bouton play
 // @match        https://tamilgun.now/*
 // @run-at       document-idle
 // @grant        GM.xmlHttpRequest
@@ -351,6 +351,7 @@
   let restorers = [];
   let suppressing = false;
   let adTimer = null;
+  let bigPlay = null;
 
   const style = document.createElement('style');
   style.textContent = `
@@ -389,19 +390,25 @@
     #tgp-hero .tgp-fav.on{color:#e50914;border-color:#e50914}
     #tgp-hero a.tgp-more{color:#ddd;font-size:13px}
 
-    /* Mode lecture: une seule barre, hero masqué → plus de demi-écran mangé par le sticky */
-    body.tgp-watching{overflow-y:auto!important;overflow-x:hidden!important;height:auto!important}
+    /* Mode Lecture = théâtre fixe plein écran (tout le bloc vidéo visible) */
+    body.tgp-watching{overflow:hidden!important;height:100%!important;touch-action:none}
+    html.tgp-watching{overflow:hidden!important;height:100%!important}
     body.tgp-watching #tgp-hero{display:none!important}
+    body.tgp-watching #tgp-bar{
+      position:fixed!important;top:0;left:0;right:0;z-index:2147483010!important}
     body.tgp-watching #tgp-bar .tgp-watch-stop{display:inline-block!important}
     body.tgp-watching #tgp-toggle{display:none!important}
     #tgp-bar .tgp-watch-stop{display:none}
 
-    #tgp-stage{display:none;flex-direction:column;gap:0;width:100%;max-width:1200px;margin:0 auto;
-      padding:0 0 calc(28px + env(safe-area-inset-bottom));background:#000;position:relative;z-index:2147482980;
-      pointer-events:auto;min-height:calc(100dvh - 56px)}
-    body.tgp-watching #tgp-stage{display:flex}
-    #tgp-sources{display:flex;flex-wrap:wrap;gap:8px;justify-content:center;padding:10px 12px;background:#0f0f0f;
-      flex:none;max-height:88px;overflow:auto}
+    #tgp-stage{display:none;flex-direction:column;gap:0;width:100%;background:#000;
+      pointer-events:auto}
+    body.tgp-watching #tgp-stage{
+      display:flex!important;position:fixed!important;left:0;right:0;bottom:0;
+      top:56px;top:calc(52px + env(safe-area-inset-top));
+      z-index:2147483005!important;max-width:none!important;margin:0!important;
+      padding:0!important;min-height:0!important;height:auto!important}
+    #tgp-sources{display:flex;flex-wrap:wrap;gap:8px;justify-content:center;padding:8px 10px;background:#0f0f0f;
+      flex:0 0 auto;max-height:64px;overflow:auto;z-index:3}
     #tgp-sources:empty{display:none}
     #tgp-sources .tgp-keeper{display:contents!important;padding:0!important;border:none!important;background:transparent!important}
     #tgp-sources a,#tgp-sources button,#tgp-sources li,#tgp-sources [role="tab"],#tgp-sources [role="button"]{
@@ -411,26 +418,28 @@
     #tgp-sources .active,#tgp-sources .current,#tgp-sources .selected,#tgp-sources [aria-selected="true"],
     #tgp-sources a:hover,#tgp-sources button:hover{background:#e50914!important;border-color:#e50914!important}
 
-    #tgp-player-wrap{position:relative;width:100%;flex:none;aspect-ratio:16/9;
-      height:auto;max-height:calc(100dvh - 56px - 88px - env(safe-area-inset-bottom));
-      background:#000;overflow:visible;pointer-events:auto!important;z-index:1}
-    #tgp-player-wrap > *:not(iframe):not(video){
-      position:relative!important;display:block!important;width:100%!important;height:100%!important;
-      min-height:100%!important;max-width:none!important;max-height:none!important;margin:0!important;float:none!important;
-      background:#000!important;border:none!important;box-shadow:none!important;overflow:hidden!important}
-    #tgp-player-wrap > iframe,#tgp-player-wrap > video{
+    #tgp-player-wrap{position:relative;flex:1 1 auto;width:100%;min-height:0;height:100%;
+      background:#000;overflow:hidden;pointer-events:auto!important;z-index:1}
+    #tgp-player-wrap > *:not(iframe):not(video):not(#tgp-big-play){
       position:absolute!important;inset:0!important;display:block!important;width:100%!important;height:100%!important;
-      border:0!important;background:#000!important;z-index:2}
+      max-width:none!important;max-height:none!important;margin:0!important;float:none!important;
+      background:#000!important;border:none!important;box-shadow:none!important;overflow:hidden!important}
+    #tgp-player-wrap > iframe,#tgp-player-wrap > video,
     #tgp-player-wrap iframe.tgp-player,video.tgp-player,#tgp-player-wrap iframe,#tgp-player-wrap video{
-      display:block!important;width:100%!important;height:100%!important;max-height:none!important;
-      border:0!important;background:#000!important;pointer-events:auto!important;z-index:2!important}
-    /* Anti-pub: liens / iframes pubs superposés */
+      position:absolute!important;inset:0!important;display:block!important;width:100%!important;height:100%!important;
+      max-height:none!important;border:0!important;background:#000!important;pointer-events:auto!important;z-index:2!important}
     #tgp-player-wrap a[data-tgp-ad],#tgp-player-wrap iframe[data-tgp-ad],#tgp-player-wrap [data-tgp-ad]{
-      display:none!important;pointer-events:none!important;visibility:hidden!important}
-    #tgp-player-wrap a[href]:not([data-tgp-play]){pointer-events:none!important}
-    #tgp-player-wrap a[data-tgp-play],#tgp-player-wrap button,#tgp-player-wrap [class*="play" i],
-    #tgp-player-wrap [id*="play" i],#tgp-player-wrap .jw-icon,#tgp-player-wrap .vjs-big-play-button{
-      pointer-events:auto!important;cursor:pointer!important;z-index:5!important}
+      display:none!important;pointer-events:none!important;visibility:hidden!important;width:0!important;height:0!important}
+    #tgp-player-wrap a[target="_blank"]{pointer-events:none!important;display:none!important}
+
+    /* Gros play toujours centré à l'écran */
+    #tgp-big-play{position:absolute;inset:0;z-index:20;display:flex;align-items:center;justify-content:center;
+      background:radial-gradient(circle at center,rgba(0,0,0,.35),rgba(0,0,0,.72));border:0;cursor:pointer;padding:0}
+    #tgp-big-play[hidden]{display:none!important}
+    #tgp-big-play span{width:88px;height:88px;border-radius:50%;background:#e50914;color:#fff;
+      display:flex;align-items:center;justify-content:center;font-size:42px;line-height:1;
+      box-shadow:0 8px 28px #000a;padding-left:6px}
+    #tgp-big-play:active span{transform:scale(.96)}
 
     #tgp-toggle{position:fixed;left:14px;bottom:calc(14px + env(safe-area-inset-bottom));z-index:2147483001;
       width:48px;height:48px;border-radius:50%;border:none;background:#e50914;color:#fff;font-size:20px;
@@ -438,7 +447,7 @@
 
     @media (max-width:700px){
       #tgp-hero .tgp-go{font-size:17px;padding:14px 26px;min-height:48px}
-      #tgp-player-wrap{max-height:calc(100dvh - 56px - 72px - env(safe-area-inset-bottom))}
+      #tgp-big-play span{width:76px;height:76px;font-size:36px}
     }
   `;
   document.head.appendChild(style);
@@ -695,9 +704,12 @@
   }
 
   function isExternalOrAdUrl(href) {
-    if (!href || href === '#' || href.startsWith('javascript:')) return true;
+    if (!href) return false;
+    const raw = String(href).trim();
+    // # / javascript: = souvent le vrai bouton play du site, pas une pub
+    if (raw === '#' || raw.startsWith('#') || raw.toLowerCase().startsWith('javascript:')) return false;
     try {
-      const u = new URL(href, location.href);
+      const u = new URL(raw, location.href);
       if (AD.test(u.href)) return true;
       if (/doubleclick|googlesynd|popads|propeller|adsterra|exoclick|clickadu|ouo\.io|bit\.ly|tinyurl|redirect|popup|popunder/i.test(u.href)) return true;
       if (u.origin !== location.origin) return true;
@@ -724,33 +736,32 @@
     });
 
     root.querySelectorAll('a[href]').forEach(a => {
-      if (a.closest('#tgp-sources')) return;
+      if (a.closest('#tgp-sources') || a.id === 'tgp-big-play') return;
       if (looksLikePlayControl(a)) {
         a.setAttribute('data-tgp-play', '1');
         a.removeAttribute('data-tgp-ad');
         return;
       }
+      // pubs = nouvel onglet ou URL externe / ad network
       if (a.target === '_blank' || isExternalOrAdUrl(a.getAttribute('href'))) {
         a.setAttribute('data-tgp-ad', '1');
-        a.removeAttribute('href');
         a.addEventListener('click', e => { e.preventDefault(); e.stopPropagation(); }, true);
       }
     });
 
-    // calques positionnés qui recouvrent le player sans être le contrôle play
     root.querySelectorAll('div, span, section, aside').forEach(el => {
-      if (el.id === 'tgp-player-wrap' || el.contains(main)) return;
+      if (el.id === 'tgp-player-wrap' || el.id === 'tgp-big-play') return;
+      if (main && (el === main || el.contains(main))) return;
       if (looksLikePlayControl(el)) return;
       const st = window.getComputedStyle(el);
       if (!/fixed|absolute/i.test(st.position)) return;
       const r = el.getBoundingClientRect();
       if (r.width < 80 || r.height < 80) return;
       const hasAdLink = [...el.querySelectorAll('a[href], a[data-tgp-ad], iframe')].some(n =>
-        n.hasAttribute('data-tgp-ad') || (n.tagName === 'A' && isExternalOrAdUrl(n.getAttribute('href') || '')) ||
+        n.hasAttribute('data-tgp-ad') ||
+        (n.tagName === 'A' && (n.target === '_blank' || isExternalOrAdUrl(n.getAttribute('href') || ''))) ||
         (n.tagName === 'IFRAME' && n !== main));
-      if (hasAdLink || (+st.zIndex > 10 && el.querySelector('a'))) {
-        el.setAttribute('data-tgp-ad', '1');
-      }
+      if (hasAdLink) el.setAttribute('data-tgp-ad', '1');
     });
   }
 
@@ -758,6 +769,7 @@
     if (!stage || stage.dataset.tgpGuard === '1') return;
     stage.dataset.tgpGuard = '1';
     stage.addEventListener('click', e => {
+      if (e.target.closest('#tgp-big-play')) return;
       const a = e.target.closest('a');
       if (!a || a.closest('#tgp-sources')) return;
       if (a.hasAttribute('data-tgp-play') || looksLikePlayControl(a)) return;
@@ -779,25 +791,70 @@
     if (adTimer) { clearInterval(adTimer); adTimer = null; }
   }
 
+  function ensureBigPlay() {
+    if (!playerWrap) return;
+    bigPlay = playerWrap.querySelector('#tgp-big-play');
+    if (bigPlay) return;
+    bigPlay = document.createElement('button');
+    bigPlay.id = 'tgp-big-play';
+    bigPlay.type = 'button';
+    bigPlay.setAttribute('aria-label', 'Lecture');
+    bigPlay.innerHTML = '<span>▶</span>';
+    bigPlay.addEventListener('click', e => {
+      e.preventDefault();
+      e.stopPropagation();
+      triggerNativePlay();
+      bigPlay.hidden = true;
+    });
+    playerWrap.appendChild(bigPlay);
+  }
+
+  function triggerNativePlay() {
+    if (!playerWrap) return;
+    const video = playerWrap.querySelector('video');
+    if (video) {
+      try { video.muted = false; } catch (e) {}
+      const p = video.play();
+      if (p && p.catch) p.catch(() => {});
+    }
+    const playEl = playerWrap.querySelector(
+      '[data-tgp-play], .vjs-big-play-button, .jw-icon-display, [class*="play" i], [id*="play" i], button[aria-label*="play" i]'
+    );
+    if (playEl && playEl.id !== 'tgp-big-play') {
+      try { playEl.click(); } catch (e) {}
+    }
+    const media = findPlayerMedia(playerWrap, { allowHidden: true });
+    if (media) {
+      try { media.focus({ preventScroll: true }); } catch (e) {}
+      // certains players démarrent au clic sur l'iframe
+      try { media.click(); } catch (e) {}
+    }
+  }
+
   function setWatching(on) {
     opened = !!on;
     document.body.classList.toggle('tgp-watching', opened);
+    document.documentElement.classList.toggle('tgp-watching', opened);
     document.documentElement.classList.toggle('tgp-on', document.body.classList.contains('tgp-on'));
     if (opened && stage) {
+      window.scrollTo(0, 0);
       bindAdClickGuard();
       scrubPlayerAds(playerWrap);
+      ensureBigPlay();
+      if (bigPlay) bigPlay.hidden = false;
       startAdScrub();
-      // remonter en haut puis centrer le stage sous la barre
-      window.scrollTo({ top: 0, behavior: 'auto' });
-      requestAnimationFrame(() => {
-        if (stage) stage.scrollIntoView({ behavior: 'smooth', block: 'start' });
-      });
-      const media = findPlayerMedia(stage, { allowHidden: true }) || findPlayerMedia(document, { allowHidden: true });
+      // caler la hauteur sous la barre réelle
+      const h = (bar && bar.offsetHeight) || 56;
+      stage.style.top = h + 'px';
+      const media = findPlayerMedia(playerWrap, { allowHidden: true });
       if (media) {
         try { media.focus({ preventScroll: true }); } catch (e) {}
       }
     } else {
       stopAdScrub();
+      if (stage) stage.style.top = '';
+      if (bigPlay) bigPlay.hidden = true;
+      document.documentElement.classList.remove('tgp-watching');
     }
   }
 
@@ -923,12 +980,13 @@
     document.querySelectorAll('.tgp-player,.tgp-keeper').forEach(e =>
       e.classList.remove('tgp-player', 'tgp-keeper'));
     document.body.classList.remove('tgp-on', 'tgp-watching');
-    document.documentElement.classList.remove('tgp-on');
+    document.documentElement.classList.remove('tgp-on', 'tgp-watching');
     if (bar) { bar.remove(); bar = null; }
     if (hero) { hero.remove(); hero = null; }
     if (stage) { stage.remove(); stage = null; }
     sourcesBox = null;
     playerWrap = null;
+    bigPlay = null;
     goBtn = null;
     stopBtn = null;
     favBtn = null;
