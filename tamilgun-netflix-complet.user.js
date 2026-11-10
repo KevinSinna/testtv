@@ -749,9 +749,16 @@
   }
   toggle.addEventListener('click', () => setEnabled(!enabled));
 
+  document.addEventListener('keydown', e => {
+    if (e.key === 'Escape' && opened) {
+      e.preventDefault();
+      setFullscreen(false);
+    }
+  }, true);
+
   function update() {
     const movie = applied || isMoviePage();
-    toggle.style.display = movie ? 'block' : 'none';
+    toggle.style.display = movie && !opened ? 'block' : 'none';
     if (enabled && movie) isolate(); else clear();
   }
 
