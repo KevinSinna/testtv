@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         TamilGun - Style Netflix (grille + fiche film)
 // @namespace    local.netflix.style
-// @version      5.3
-// @description  Grille Netflix + Lecture en théâtre plein écran avec gros bouton play
+// @version      5.4
+// @description  Grille Netflix + Lecture en théâtre plein écran (sans play custom)
 // @match        https://tamilgun.now/*
 // @run-at       document-idle
 // @grant        GM.xmlHttpRequest
@@ -351,7 +351,6 @@
   let restorers = [];
   let suppressing = false;
   let adTimer = null;
-  let bigPlay = null;
 
   const style = document.createElement('style');
   style.textContent = `
@@ -420,7 +419,7 @@
 
     #tgp-player-wrap{position:relative;flex:1 1 auto;width:100%;min-height:0;height:100%;
       background:#000;overflow:hidden;pointer-events:auto!important;z-index:1}
-    #tgp-player-wrap > *:not(iframe):not(video):not(#tgp-big-play){
+    #tgp-player-wrap > *:not(iframe):not(video){
       position:absolute!important;inset:0!important;display:block!important;width:100%!important;height:100%!important;
       max-width:none!important;max-height:none!important;margin:0!important;float:none!important;
       background:#000!important;border:none!important;box-shadow:none!important;overflow:hidden!important}
@@ -431,15 +430,9 @@
     #tgp-player-wrap a[data-tgp-ad],#tgp-player-wrap iframe[data-tgp-ad],#tgp-player-wrap [data-tgp-ad]{
       display:none!important;pointer-events:none!important;visibility:hidden!important;width:0!important;height:0!important}
     #tgp-player-wrap a[target="_blank"]{pointer-events:none!important;display:none!important}
-
-    /* Gros play toujours centré à l'écran */
-    #tgp-big-play{position:absolute;inset:0;z-index:20;display:flex;align-items:center;justify-content:center;
-      background:radial-gradient(circle at center,rgba(0,0,0,.35),rgba(0,0,0,.72));border:0;cursor:pointer;padding:0}
-    #tgp-big-play[hidden]{display:none!important}
-    #tgp-big-play span{width:88px;height:88px;border-radius:50%;background:#e50914;color:#fff;
-      display:flex;align-items:center;justify-content:center;font-size:42px;line-height:1;
-      box-shadow:0 8px 28px #000a;padding-left:6px}
-    #tgp-big-play:active span{transform:scale(.96)}
+    #tgp-player-wrap a[data-tgp-play],#tgp-player-wrap button,#tgp-player-wrap [class*="play" i],
+    #tgp-player-wrap [id*="play" i],#tgp-player-wrap .jw-icon,#tgp-player-wrap .vjs-big-play-button{
+      pointer-events:auto!important;cursor:pointer!important;z-index:5!important}
 
     #tgp-toggle{position:fixed;left:14px;bottom:calc(14px + env(safe-area-inset-bottom));z-index:2147483001;
       width:48px;height:48px;border-radius:50%;border:none;background:#e50914;color:#fff;font-size:20px;
@@ -447,7 +440,6 @@
 
     @media (max-width:700px){
       #tgp-hero .tgp-go{font-size:17px;padding:14px 26px;min-height:48px}
-      #tgp-big-play span{width:76px;height:76px;font-size:36px}
     }
   `;
   document.head.appendChild(style);
@@ -736,7 +728,7 @@
     });
 
     root.querySelectorAll('a[href]').forEach(a => {
-      if (a.closest('#tgp-sources') || a.id === 'tgp-big-play') return;
+      if (a.closest('#tgp-sources')) return;
       if (looksLikePlayControl(a)) {
         a.setAttribute('data-tgp-play', '1');
         a.removeAttribute('data-tgp-ad');
@@ -750,7 +742,7 @@
     });
 
     root.querySelectorAll('div, span, section, aside').forEach(el => {
-      if (el.id === 'tgp-player-wrap' || el.id === 'tgp-big-play') return;
+      if (el.id === 'tgp-player-wrap') return;
       if (main && (el === main || el.contains(main))) return;
       if (looksLikePlayControl(el)) return;
       const st = window.getComputedStyle(el);
@@ -769,7 +761,6 @@
     if (!stage || stage.dataset.tgpGuard === '1') return;
     stage.dataset.tgpGuard = '1';
     stage.addEventListener('click', e => {
-      if (e.target.closest('#tgp-big-play')) return;
       const a = e.target.closest('a');
       if (!a || a.closest('#tgp-sources')) return;
       if (a.hasAttribute('data-tgp-play') || looksLikePlayControl(a)) return;
@@ -791,46 +782,6 @@
     if (adTimer) { clearInterval(adTimer); adTimer = null; }
   }
 
-  function ensureBigPlay() {
-    if (!playerWrap) return;
-    bigPlay = playerWrap.querySelector('#tgp-big-play');
-    if (bigPlay) return;
-    bigPlay = document.createElement('button');
-    bigPlay.id = 'tgp-big-play';
-    bigPlay.type = 'button';
-    bigPlay.setAttribute('aria-label', 'Lecture');
-    bigPlay.innerHTML = '<span>▶</span>';
-    bigPlay.addEventListener('click', e => {
-      e.preventDefault();
-      e.stopPropagation();
-      triggerNativePlay();
-      bigPlay.hidden = true;
-    });
-    playerWrap.appendChild(bigPlay);
-  }
-
-  function triggerNativePlay() {
-    if (!playerWrap) return;
-    const video = playerWrap.querySelector('video');
-    if (video) {
-      try { video.muted = false; } catch (e) {}
-      const p = video.play();
-      if (p && p.catch) p.catch(() => {});
-    }
-    const playEl = playerWrap.querySelector(
-      '[data-tgp-play], .vjs-big-play-button, .jw-icon-display, [class*="play" i], [id*="play" i], button[aria-label*="play" i]'
-    );
-    if (playEl && playEl.id !== 'tgp-big-play') {
-      try { playEl.click(); } catch (e) {}
-    }
-    const media = findPlayerMedia(playerWrap, { allowHidden: true });
-    if (media) {
-      try { media.focus({ preventScroll: true }); } catch (e) {}
-      // certains players démarrent au clic sur l'iframe
-      try { media.click(); } catch (e) {}
-    }
-  }
-
   function setWatching(on) {
     opened = !!on;
     document.body.classList.toggle('tgp-watching', opened);
@@ -840,10 +791,7 @@
       window.scrollTo(0, 0);
       bindAdClickGuard();
       scrubPlayerAds(playerWrap);
-      ensureBigPlay();
-      if (bigPlay) bigPlay.hidden = false;
       startAdScrub();
-      // caler la hauteur sous la barre réelle
       const h = (bar && bar.offsetHeight) || 56;
       stage.style.top = h + 'px';
       const media = findPlayerMedia(playerWrap, { allowHidden: true });
@@ -853,7 +801,6 @@
     } else {
       stopAdScrub();
       if (stage) stage.style.top = '';
-      if (bigPlay) bigPlay.hidden = true;
       document.documentElement.classList.remove('tgp-watching');
     }
   }
@@ -986,7 +933,6 @@
     if (stage) { stage.remove(); stage = null; }
     sourcesBox = null;
     playerWrap = null;
-    bigPlay = null;
     goBtn = null;
     stopBtn = null;
     favBtn = null;
