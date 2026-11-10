@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         TamilGun - Style Netflix (grille + fiche film)
 // @namespace    local.netflix.style
-// @version      5.0
+// @version      5.1
 // @description  Grille Netflix + fiche film avec lecteur dédié cliquable, sources, favoris et mode lecture
 // @match        https://tamilgun.now/*
 // @run-at       document-idle
@@ -354,8 +354,11 @@
   const style = document.createElement('style');
   style.textContent = `
     [data-tgp-hide]{display:none!important}
-    body.tgp-on{background:#0b0b0b!important;color:#fff!important;margin:0!important}
-    body.tgp-on > *:not(#tgp-bar):not(#tgp-hero):not(#tgp-stage):not(#tgp-toggle){display:none!important}
+    html.tgp-on,body.tgp-on{background:#0b0b0b!important;color:#fff!important;min-height:100%!important}
+    body.tgp-on{margin:0!important}
+    /* Ne jamais masquer la grille Netflix ni notre UI fiche */
+    body.tgp-on > *:not(#tgp-bar):not(#tgp-hero):not(#tgp-stage):not(#tgp-toggle):not(#tgn-root):not(#tgn-toggle){display:none!important}
+    body.tgp-on #tgn-root{display:none!important} /* grille off seulement en mode fiche confirmé */
 
     #tgp-bar{display:flex;align-items:center;gap:10px;padding:10px 12px;padding-top:calc(10px + env(safe-area-inset-top));
       background:#000;color:#fff;font-family:-apple-system,Helvetica,Arial,sans-serif;
@@ -450,18 +453,22 @@
     .replace(/[^a-z0-9]+/g, ' ').trim();
   const isUi = el => el && (UI_IDS.has(el.id) || (el.closest && el.closest('#tgp-bar,#tgp-hero,#tgp-stage,#tgp-toggle')));
 
-  function findPlayerMedia(root) {
+  function findPlayerMedia(root, opts) {
+    const allowHidden = !!(opts && opts.allowHidden);
     const scope = root || document;
     const list = [...scope.querySelectorAll('video, iframe')].filter(el => {
-      if (el.closest('#tgp-bar, #tgp-hero')) return false;
+      if (el.closest('#tgp-bar, #tgp-hero, #tgn-root')) return false;
       const src = el.src || el.getAttribute('src') || el.dataset.src || '';
       if (AD.test(src)) return false;
-      if (el.tagName === 'VIDEO') return true;
+      if (el.tagName === 'VIDEO') {
+        const r = el.getBoundingClientRect();
+        return allowHidden || (r.width >= 160 && r.height >= 90) || el.readyState > 0;
+      }
       if (!src && !el.dataset.src) return false;
       const r = el.getBoundingClientRect();
-      if (r.width >= 200 && r.height >= 100) return true;
-      // accepter aussi hors écran / dans un parent masqué (re-detect)
-      return !!(src || el.dataset.src);
+      if (r.width >= 280 && r.height >= 150) return true;
+      // hors écran seulement après détection page film (re-adopt source)
+      return allowHidden && !!(src || el.dataset.src);
     });
     list.sort((a, b) => area(b) - area(a));
     return list[0] || null;
@@ -500,10 +507,17 @@
     return keepers.filter(el => !keepers.some(o => o !== el && el.contains(o)));
   }
 
+  function gridIsActive() {
+    const root = document.getElementById('tgn-root');
+    if (!root || root.classList.contains('tgn-hidden')) return false;
+    return !!root.querySelector('.tgn-card');
+  }
+
   function isMoviePage() {
+    // Ne pas voler la page liste : sélecteurs "tabs/server/player" trop larges = faux positifs → écran vide
+    if (gridIsActive()) return false;
     if (/video|article/i.test(meta('og:type'))) return true;
-    if (findPlayerMedia()) return true;
-    return !!document.querySelector(PLAYER_SHELL_SELECTOR + ', ' + SOURCE_SELECTOR);
+    return !!findPlayerMedia(document, { allowHidden: false });
   }
 
   function adopt(el, target) {
@@ -683,9 +697,10 @@
   function setWatching(on) {
     opened = !!on;
     document.body.classList.toggle('tgp-watching', opened);
+    document.documentElement.classList.toggle('tgp-on', document.body.classList.contains('tgp-on'));
     if (opened && stage) {
       stage.scrollIntoView({ behavior: 'smooth', block: 'start' });
-      const media = findPlayerMedia(stage) || findPlayerMedia();
+      const media = findPlayerMedia(stage, { allowHidden: true }) || findPlayerMedia(document, { allowHidden: true });
       if (media) {
         try { media.focus({ preventScroll: true }); } catch (e) {}
       }
@@ -799,12 +814,13 @@
 
   function clear() {
     suppressing = true;
-    setWatching(false);
+    opened = false;
     restoreAdopted();
     document.querySelectorAll('[data-tgp-hide]').forEach(e => e.removeAttribute('data-tgp-hide'));
     document.querySelectorAll('.tgp-player,.tgp-keeper').forEach(e =>
       e.classList.remove('tgp-player', 'tgp-keeper'));
     document.body.classList.remove('tgp-on', 'tgp-watching');
+    document.documentElement.classList.remove('tgp-on');
     if (bar) { bar.remove(); bar = null; }
     if (hero) { hero.remove(); hero = null; }
     if (stage) { stage.remove(); stage = null; }
@@ -853,42 +869,57 @@
   }
 
   function isolate() {
-    const media = findPlayerMedia();
+    if (gridIsActive()) return false;
+
+    // Exiger un vrai média visible — sinon on laisse la page intacte (observer réessaie)
+    const media = findPlayerMedia(document, { allowHidden: false });
+    if (!media) return false;
+
     const shell = findPlayerShell(media);
     const sources = collectSources(shell);
+    const targetShell = shell || media;
 
-    if (!shell && !sources.length && !media) return false;
+    // Refuser d'adopter un monstre DOM (sinon page vide / cassée)
+    const links = targetShell.querySelectorAll('a[href]').length;
+    const imgs = targetShell.querySelectorAll('img').length;
+    if (links > 40 || imgs > 25 || targetShell === document.body) return false;
 
     suppressing = true;
     const wasOpened = opened;
-    // restore previous adoption before rebuilding
-    if (applied) {
-      restoreAdopted();
-      if (bar) bar.remove();
-      if (hero) hero.remove();
-      if (stage) stage.remove();
-      bar = hero = stage = null;
+    try {
+      if (applied) {
+        restoreAdopted();
+        if (bar) bar.remove();
+        if (hero) hero.remove();
+        if (stage) stage.remove();
+        bar = hero = stage = null;
+      }
+
+      filmHref = location.href.split('#')[0];
+      toiRequested = false;
+      toi = null;
+
+      buildStage(targetShell, sources);
+      buildChrome(getInfo());
+
+      [...document.body.children].forEach(child => {
+        if (!UI_IDS.has(child.id) && child.id !== 'tgn-root' && child.id !== 'tgn-toggle') {
+          child.setAttribute('data-tgp-hide', '1');
+        }
+      });
+
+      document.body.classList.add('tgp-on');
+      document.documentElement.classList.add('tgp-on');
+      applied = true;
+      opened = wasOpened;
+      if (opened) setWatching(true);
+      return true;
+    } catch (err) {
+      try { clear(); } catch (e) {}
+      return false;
+    } finally {
+      suppressing = false;
     }
-
-    filmHref = location.href.split('#')[0];
-    toiRequested = false;
-    toi = null;
-
-    const targetShell = shell || media;
-    buildStage(targetShell, sources);
-
-    // masquer le reste du site (CSS body.tgp-on s'en charge aussi)
-    [...document.body.children].forEach(child => {
-      if (!UI_IDS.has(child.id)) child.setAttribute('data-tgp-hide', '1');
-    });
-
-    document.body.classList.add('tgp-on');
-    buildChrome(getInfo());
-    applied = true;
-    opened = wasOpened;
-    if (opened) setWatching(true);
-    suppressing = false;
-    return true;
   }
 
   const toggle = document.createElement('button');
@@ -908,14 +939,21 @@
 
   function update() {
     if (suppressing) return;
-    const movie = applied || isMoviePage();
-    toggle.style.display = movie && !opened ? 'block' : 'none';
     if (!enabled) { clear(); return; }
+    if (gridIsActive()) {
+      if (applied) clear();
+      toggle.style.display = 'none';
+      return;
+    }
+    const movie = isMoviePage() || (applied && !!document.getElementById('tgp-stage'));
+    toggle.style.display = movie && !opened ? 'block' : 'none';
     if (!movie) { clear(); return; }
-    if (applied && document.getElementById('tgp-stage')) {
+    if (applied && document.getElementById('tgp-bar') && document.getElementById('tgp-stage')) {
       softRefresh();
       return;
     }
+    // UI manquante / cassée → reconstruire, sinon clear déjà fait si échec
+    if (applied) clear();
     isolate();
   }
 
